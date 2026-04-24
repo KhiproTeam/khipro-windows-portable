@@ -1,0 +1,164 @@
+name: Check & Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
+
+      - name: Get current version
+        id: current
+        run: |
+          ver=$(grep -oP '(?<=#define KHIPRO_VERSION ")[^"]+' src/resources.h)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Current version: $ver"
+
+      - name: Get latest release version from khipro-m17n
+        id: remote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api repos/rank-coder/khipro-m17n/releases/latest --jq '.tag_name')
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "Remote version: $tag"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          current="${{ steps.current.outputs.version }}"
+          remote="${{ steps.remote.outputs.version }}"
+          current_clean="${current#v}"
+          remote_clean="${remote#v}"
+
+          if [ "$current_clean" = "$remote_clean" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Versions match ($current). Will rebuild and update existing release asset."
+          else
+            IFS='.' read -r cmaj cmin cpat <<< "$current_clean"
+            IFS='.' read -r rmaj rmin rpat <<< "$remote_clean"
+            if [ "$((10#$rmaj))" -gt "$((10#$cmaj))" ] || \
+               { [ "$((10#$rmaj))" -eq "$((10#$cmaj))" ] && [ "$((10#$rmin))" -gt "$((10#$cmin))" ]; } || \
+               { [ "$((10#$rmaj))" -eq "$((10#$cmaj))" ] && [ "$((10#$rmin))" -eq "$((10#$cmin))" ] && [ "$((10#$rpat))" -gt "$((10#$cpat))" ]; }; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "Update needed: $current -> $remote"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Current ($current) is not behind remote ($remote). Will rebuild and update existing release asset."
+            fi
+          fi
+
+      - name: Download release source
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          remote="${{ steps.remote.outputs.version }}"
+          mkdir -p /tmp/m17n-release
+          curl -fsSL -o /tmp/m17n-release/source.tar.gz \
+            "https://github.com/rank-coder/khipro-m17n/archive/refs/tags/${remote}.tar.gz"
+          tar -xzf /tmp/m17n-release/source.tar.gz -C /tmp/m17n-release
+
+      - name: Update bn-khipro.mim
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          mim=$(find /tmp/m17n-release -name "bn-khipro.mim" -type f | head -1)
+          if [ -z "$mim" ]; then
+            echo "ERROR: bn-khipro.mim not found in release source"
+            exit 1
+          fi
+          cp "$mim" data/bn-khipro.mim
+          echo "Updated data/bn-khipro.mim"
+
+      - name: Download test cases
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          curl -fsSL -o tests/khipro-testcases.csv \
+            "https://raw.githubusercontent.com/KhiproTeam/khipro-testcases/main/khipro-testcases.csv"
+
+      - name: Update version in source
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          remote="${{ steps.remote.outputs.version }}"
+          sed -i "s/#define KHIPRO_VERSION \".*\"/#define KHIPRO_VERSION \"${remote}\"/" src/resources.h
+          echo "Updated version to $remote"
+
+      - name: Build & Test (native)
+        id: tests
+        run: |
+          mkdir -p build
+          g++ -std=c++17 -Wall -Wextra tests/engine_tests.cpp src/mim_engine.cpp -o build/engine_tests
+          ./build/engine_tests
+
+      - name: Build Windows executable
+        id: build_exe
+        run: |
+          mkdir -p build/win
+          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
+            -Wall -Wextra -ffunction-sections -fdata-sections -fno-rtti \
+            -c src/mim_engine.cpp -o build/win/mim_engine.o
+          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
+            -Wall -Wextra -ffunction-sections -fdata-sections -fno-rtti \
+            -c src/main.cpp -o build/win/main.o
+          x86_64-w64-mingw32-windres resources/khipro.rc -O coff -o build/win/khipro.res.o
+          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
+            build/win/main.o build/win/mim_engine.o build/win/khipro.res.o \
+            -o khipro.exe \
+            -Wl,--gc-sections -s -municode -mwindows -static -static-libgcc -static-libstdc++ \
+            -lshell32
+
+      - name: Commit and push
+        if: steps.compare.outputs.skip == 'false' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/bn-khipro.mim tests/khipro-testcases.csv src/resources.h
+          remote="${{ steps.remote.outputs.version }}"
+          git commit -m "Update to $remote"
+          git push
+
+      - name: Create release (version update)
+        if: steps.compare.outputs.skip == 'false' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote="${{ steps.remote.outputs.version }}"
+          gh release create "$remote" khipro.exe \
+            --title "Khipro Windows Portable - $remote" \
+            --notes "For the full changelog, see the [khipro-m17n release](https://github.com/rank-coder/khipro-m17n/releases/tag/${remote})."
+
+      - name: Update latest release asset (rebuild)
+        if: steps.compare.outputs.skip == 'true' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -z "$tag" ]; then
+            echo "ERROR: No existing release found"
+            exit 1
+          fi
+          echo "Updating asset on existing release: $tag"
+          gh release delete-asset "$tag" khipro.exe --yes || true
+          gh release upload "$tag" khipro.exe --clobber
+          echo "Asset updated on release $tag"
+
+      - name: Set result
+        id: result
+        if: always()
+        run: |
+          if [ "${{ steps.tests.outcome }}" != "success" ] || [ "${{ steps.build_exe.outcome }}" != "success" ]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.compare.outputs.skip }}" = "true" ]; then
+            echo "status=rebuilt" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=released" >> "$GITHUB_OUTPUT"
+          fi

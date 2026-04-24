@@ -1,0 +1,7 @@
+#include "../src/resources.h"
+
+IDI_ACTIVE ICON "icons/active.ico"
+IDI_INACTIVE ICON "icons/inactive.ico"
+IDR_MIM RCDATA "../data/bn-khipro.mim"
+
+1 RT_MANIFEST "khipro.manifest"
