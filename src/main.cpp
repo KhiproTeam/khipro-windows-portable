@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 qomarhsn
+
 #define _WIN32_WINNT 0x0601
 #define _WIN32_IE 0x0600
 #include <windows.h>

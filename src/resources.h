@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 qomarhsn
+
 #pragma once
 
 #define KHIPRO_VERSION "v34.6.0"

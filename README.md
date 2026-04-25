@@ -34,7 +34,7 @@ That's it — `khipro.exe` will be in the project root.
 
 ## License
 
-This repository is licensed under the [GNU General Public License v3.0](LICENSE).
+This repository is licensed under the [Mozilla Public License v2.0](LICENSE) (MPL-2.0).
 
-> The input method file `bn-khipro.mim` comes from the khipro-m17n project and is licensed under the MIT License. See it here: [https://github.com/rank-coder/khipro-m17n](https://github.com/rank-coder/khipro-m17n)
+> The input method file `data/bn-khipro.mim` comes from the `khipro-m17n` project and is licensed under the MIT License (see the file header and upstream repo: [https://github.com/rank-coder/khipro-m17n](https://github.com/rank-coder/khipro-m17n)).
 
