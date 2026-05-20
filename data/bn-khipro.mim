@@ -1,4 +1,4 @@
-;; bn-khipro.mim | A fixed-phonetic keyboard layout or input method concept for Bengali, aiming to be the fastest typing method available for Bengali.
+;; bn-khipro.mim | A compositional keyboard layout or input method concept for Bengali, aiming to be the fastest typing method available for the language.
 ;;	MIT License
 ;;	
 ;;	Copyright (c) 2024 rank_coder
@@ -23,22 +23,26 @@
 
 (input-method bn khipro) 
 (description "
-	A fixed-phonetic keyboard layout or input method concept for Bengali, aiming to be the fastest typing method available for Bengali.
+	A compositional keyboard layout or input method concept for Bengali, aiming to be the fastest typing method available for the language.
 
 	Key Characteristics:
 
-		1. Provides the absolute flexibility and control of typing offered by any fixed layout, despite being somewhat phonetic.
-		2. Removes the need for the SHIFT key entirely.
-		3. Uses a modifier technique to type various characters without using SHIFT.
+		1. Provides the absolute flexibility and control of typing offered by any fixed layout, despite being close to phonetic style typing. Meaning it lets you type anything, what you can't get easily at all in phonetic typing methods.
+		2. Removes the need for the *SHIFT key* entirely.
+		3. Removes the need for the *Number Row* entirely.
 		4. Houses all necessary characters, and even some less-used ones, directly at the fingertips within the central keyboard area.
-		5. Utilizes key sequences to incorporate various extra characters that would otherwise be impossible on fixed layouts.
+		5. Uses a *modifier technique* to type all characters without using SHIFT.
+		6. Utilizes *key sequences* to incorporate various extra characters that would otherwise be impossible on fixed layouts.
+		7. Utilizes *function keys* like slicer (/) to break readily formed conjuncts.
 
+
+	PLEASE use it with *TYPING BOOSTER* <https://mike-fabian.github.io/ibus-typing-booster/> for the best and a steady experience.	
 	PLEASE READ THE DOCUMENTATION ON OUR WEBSITE TO BEST USE THE LAYOUT.
-		* Website: <https://khipro.khiproteam.pro.bd/>
-		* Author: Nafi [<https://github.com/rank-coder>]
-		* Team: Contributors of the GitHub repository [<https://github.com/rank-coder/khipro-m17n>] and members of the [<https://github.com/khiproteam>] GitHub rganization.
+		* Website: <https://khiproteam.github.io/khipro>
+		* Author: Nafee [<https://github.com/rank-coder>]
+		* Team: Contributors of the GitHub repository [<https://github.com/rank-coder/khipro-m17n>] and members of the [<https://github.com/khiproteam>] GitHub organization.
 ")
-(title "ক্ষিপ্র")
+(title "Khipro Compositional")
 (map
 	(shor
 		("o" "অ")
@@ -65,7 +69,7 @@
 		("uff" "‌ু")
 		("uuff" "‌ূ")
 		("qff" "‌ৃ") 
-		("of" "অ⁌")
+		("of" "ঽ")
 		("af" "া")
 		("if" "ি") 
 		("iif" "ী") 
@@ -325,7 +329,7 @@
 						((= CID 3) (delete @-2) (set P2CID CID) (set CID 65) (insert "জ্ঞ") (set SLICER 3) (set ALTERNATE 2) (shift juktoborno-state)) ;; গ 
 						((= CID 15) (delete @-2) (set P2CID CID) (set CID 46) (insert "গ্‌ণ") (set SLICER 2) (shift juktoborno-state)) ;; ণ 
 						((= CID 19) (delete @-2) (set P2CID CID) (set CID 47) (insert "গ্ধ") (set SLICER 1) (shift juktoborno-state)) ;; ধ 
-						;; ক্ষ -এর মত গ্ধ -কে ব্যঞ্জনবর্ণের মর্যাদা দেওয়ার প্রয়োজন নেই, কেননা -এর ম্যাপিং ব্যতিক্রম নয়।
+						;; ক্ষ -এর মত গ্ধ -কে ব্যঞ্জনবর্ণের মর্যাদা দেওয়ার প্রয়োজন নেই, কেননা এর ম্যাপিং ব্যতিক্রম নয়।
 						((= CID 20) (delete @-2) (set P2CID CID) (set CID 48) (insert "গ্ন") (set SLICER 1) (shift juktoborno-state)) ;; ন 
 						((= CID 23) (delete @-2) (set P2CID CID) (set CID 49) (insert "গ্‌ব") (set SLICER 2) (shift juktoborno-state)) ;; ব 
 						;; গ + ব -এর গ্‌ব এই রূপটি বাঞ্ছিত আর গ্ব এই রূপটি বাঞ্ছিত না। গ্ব লিখতে gqqb লিখতে হবে।
@@ -626,6 +630,8 @@
 						((= ALTERNATE 9)  (delete @-3) (insert "নঝ") (set PCID 9) (shift byanjon-state) )		
 						((= ALTERNATE 10)  (delete @-3) (insert "নণ") (set PCID 15) (shift byanjon-state) )		
 						((= ALTERNATE 11)  (delete @-3) (insert "ষন") (set PCID 20) (shift byanjon-state) )		
+						((= ALTERNATE 12) (delete @-4) (insert "ন্সট") (set PCID 11) (shift byanjon-state))
+						((= ALTERNATE 13) (delete @-4) (insert "ম্পল") (set PCID 28) (shift byanjon-state))
 					)
 				) 
 				;; SLICER = 3 তখন দেওয়া হয় যখন কেবল হসন্ত কিংবা ZWNJ মুছে ভাঙা যৌক্তিক না। যেমন: kkh/ = কখ হবে, কষ নয়।
@@ -735,13 +741,13 @@
 				)
 				((= PCID 110) ;; ন্স
 					(cond
-						((= CID 11) (delete @-4) (set P2CID CID) (set CID 185) (set SLICER 1) (insert "নস্ট")) ;; ট 
+						((= CID 11) (delete @-4) (set P2CID CID) (set CID 185) (set SLICER 3) (set ALTERNATE 12) (insert "নস্ট")) ;; ট 
 						(1 (shift byanjon-state))				
 					)
 				)	
 				((= PCID 126) ;; ম্প 
 					(cond
-						((= CID 28) (delete @-4) (set P2CID CID) (set CID 186) (set SLICER 1) (insert "মপ্ল"))	;; ল 
+						((= CID 28) (delete @-4) (set P2CID CID) (set CID 186) (set SLICER 3) (set ALTERNATE 13) (insert "মপ্ল"))	;; ল 
 						(1 (shift byanjon-state))				
 					)
 				)
