@@ -3,7 +3,7 @@
 
 #pragma once
 
-#define KHIPRO_VERSION "v34.12.0"
+#define KHIPRO_VERSION "v35.0.1"
 
 #define IDI_ACTIVE 101
 #define IDI_INACTIVE 102
