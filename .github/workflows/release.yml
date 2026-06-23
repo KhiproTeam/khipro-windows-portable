@@ -1,9 +1,20 @@
 name: Check & Release
 
+# Triggers:
+#   - daily cron: polls KhiproTeam/library for a new release
+#   - push to main: fires immediately when the portable patch
+#     (src/resources.h) or the vendored library (resources/khipro/)
+#     changes — so manual bumps don't wait for the next daily run
+#   - workflow_dispatch: manual
 on:
   schedule:
     - cron: '17 0 * * *'
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/resources.h'
+      - 'resources/khipro/**'
 
 permissions:
   contents: write
@@ -17,150 +28,175 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
-
-      - name: Get current version
-        id: current
+      - name: Install build tools
         run: |
-          ver=$(grep -oP '(?<=#define KHIPRO_VERSION ")[^"]+' src/resources.h)
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Current version: $ver"
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64 \
+            curl unzip
 
-      - name: Get latest release version from khipro-m17n
-        id: remote
+      # ─── Read repo state ──────────────────────────────────────────
+
+      - name: Read portable patch (src/resources.h)
+        id: portable_patch
+        run: |
+          patch=$(grep -oP '(?<=#define KHIPRO_PORTABLE_PATCH ")[^"]+' src/resources.h)
+          if [ -z "$patch" ]; then
+            echo "ERROR: KHIPRO_PORTABLE_PATCH not found in src/resources.h" >&2
+            exit 1
+          fi
+          echo "patch=$patch" >> "$GITHUB_OUTPUT"
+
+      - name: Read vendored library tag (resources/khipro/.tag)
+        id: vendored
+        run: |
+          if [ -f resources/khipro/.tag ]; then
+            tag=$(tr -d '[:space:]' < resources/khipro/.tag)
+          else
+            tag="none"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Read last released portable tag (.release-tag)
+        id: last
+        run: |
+          if [ -f .release-tag ]; then
+            tag=$(tr -d '[:space:]' < .release-tag)
+          else
+            tag="none"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # ─── Poll upstream ────────────────────────────────────────────
+
+      - name: Get latest tag from KhiproTeam/library
+        id: latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag=$(gh api repos/rank-coder/khipro-m17n/releases/latest --jq '.tag_name')
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
-          echo "Remote version: $tag"
-
-      - name: Compare versions
-        id: compare
-        run: |
-          current="${{ steps.current.outputs.version }}"
-          remote="${{ steps.remote.outputs.version }}"
-          current_clean="${current#v}"
-          remote_clean="${remote#v}"
-
-          if [ "$current_clean" = "$remote_clean" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Versions match ($current). Will rebuild and update existing release asset."
-          else
-            IFS='.' read -r cmaj cmin cpat <<< "$current_clean"
-            IFS='.' read -r rmaj rmin rpat <<< "$remote_clean"
-            if [ "$((10#$rmaj))" -gt "$((10#$cmaj))" ] || \
-               { [ "$((10#$rmaj))" -eq "$((10#$cmaj))" ] && [ "$((10#$rmin))" -gt "$((10#$cmin))" ]; } || \
-               { [ "$((10#$rmaj))" -eq "$((10#$cmaj))" ] && [ "$((10#$rmin))" -eq "$((10#$cmin))" ] && [ "$((10#$rpat))" -gt "$((10#$cpat))" ]; }; then
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              echo "Update needed: $current -> $remote"
-            else
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Current ($current) is not behind remote ($remote). Will rebuild and update existing release asset."
-            fi
-          fi
-
-      - name: Download release source
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          remote="${{ steps.remote.outputs.version }}"
-          mkdir -p /tmp/m17n-release
-          curl -fsSL -o /tmp/m17n-release/source.tar.gz \
-            "https://github.com/rank-coder/khipro-m17n/archive/refs/tags/${remote}.tar.gz"
-          tar -xzf /tmp/m17n-release/source.tar.gz -C /tmp/m17n-release
-
-      - name: Update bn-khipro.mim
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          mim=$(find /tmp/m17n-release -name "bn-khipro.mim" -type f | head -1)
-          if [ -z "$mim" ]; then
-            echo "ERROR: bn-khipro.mim not found in release source"
+          latest=$(gh api repos/KhiproTeam/library/releases/latest --jq '.tag_name')
+          if [ -z "$latest" ]; then
+            echo "ERROR: could not resolve latest library tag" >&2
             exit 1
           fi
-          cp "$mim" data/bn-khipro.mim
-          echo "Updated data/bn-khipro.mim"
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
 
-      - name: Download test cases
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          curl -fsSL -o tests/khipro-testcases.csv \
-            "https://raw.githubusercontent.com/KhiproTeam/khipro-testcases/main/khipro-testcases.csv"
+      # ─── Decide ───────────────────────────────────────────────────
+      #
+      # Single source of truth: does the target portable tag differ
+      # from the last released portable tag? If not, exit early and
+      # skip update + build + release entirely.
+      #
+      # target_tag uses the *latest* library tag if the vendored one
+      # is behind; otherwise the vendored one. This way:
+      #   - library bump on upstream    → target differs → release
+      #   - portable-patch bump in repo → target differs → release
+      #   - nothing changed             → target matches  → skip all
 
-      - name: Update version in source
-        if: steps.compare.outputs.skip == 'false'
+      - name: Decide
+        id: decide
         run: |
-          remote="${{ steps.remote.outputs.version }}"
-          sed -i "s/#define KHIPRO_VERSION \".*\"/#define KHIPRO_VERSION \"${remote}\"/" src/resources.h
-          echo "Updated version to $remote"
+          vendored="${{ steps.vendored.outputs.tag }}"
+          latest="${{ steps.latest.outputs.tag }}"
+          last="${{ steps.last.outputs.tag }}"
+          patch="${{ steps.portable_patch.outputs.patch }}"
 
-      - name: Build & Test (native)
-        id: tests
-        run: |
-          mkdir -p build
-          g++ -std=c++17 -Wall -Wextra tests/engine_tests.cpp src/mim_engine.cpp -o build/engine_tests
-          ./build/engine_tests
+          if [ "$vendored" = "$latest" ]; then
+            lib_tag_for_release="$vendored"
+            lib_moved="false"
+          else
+            lib_tag_for_release="$latest"
+            lib_moved="true"
+          fi
+
+          lib_ver="${lib_tag_for_release#v}"
+          target="v${lib_ver}-${patch}"
+
+          echo "lib_moved=$lib_moved"     >> "$GITHUB_OUTPUT"
+          echo "lib_tag=$lib_tag_for_release" >> "$GITHUB_OUTPUT"
+          echo "target=$target"           >> "$GITHUB_OUTPUT"
+
+          if [ "$target" = "$last" ]; then
+            echo "release_needed=false" >> "$GITHUB_OUTPUT"
+            echo "No release needed: target ($target) matches last release ($last)."
+          else
+            echo "release_needed=true" >> "$GITHUB_OUTPUT"
+            echo "Release needed: $last -> $target (lib_moved=$lib_moved)"
+          fi
+
+      # ─── Short-circuit: nothing to do ─────────────────────────────
+
+      - name: Nothing to do
+        if: steps.decide.outputs.release_needed != 'true'
+        run: echo "Skipping update + build + release. Already at ${{ steps.decide.outputs.target }}."
+
+      # ─── Refresh vendored library (only if upstream moved) ─────────
+
+      - name: Update vendored library
+        if: steps.decide.outputs.release_needed == 'true' && steps.decide.outputs.lib_moved == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/update-khipro-lib.sh
+
+      # ─── Build (only when releasing) ──────────────────────────────
 
       - name: Build Windows executable
         id: build_exe
-        run: |
-          mkdir -p build/win
-          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
-            -Wall -Wextra -ffunction-sections -fdata-sections -fno-rtti \
-            -c src/mim_engine.cpp -o build/win/mim_engine.o
-          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
-            -Wall -Wextra -ffunction-sections -fdata-sections -fno-rtti \
-            -c src/main.cpp -o build/win/main.o
-          x86_64-w64-mingw32-windres resources/khipro.rc -O coff -o build/win/khipro.res.o
-          x86_64-w64-mingw32-g++ -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE \
-            build/win/main.o build/win/mim_engine.o build/win/khipro.res.o \
-            -o khipro.exe \
-            -Wl,--gc-sections -s -municode -mwindows -static -static-libgcc -static-libstdc++ \
-            -lshell32
+        if: steps.decide.outputs.release_needed == 'true'
+        run: make
 
-      - name: Commit and push
-        if: steps.compare.outputs.skip == 'false' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
+      - name: Verify executable
+        if: steps.decide.outputs.release_needed == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/bn-khipro.mim tests/khipro-testcases.csv src/resources.h
-          remote="${{ steps.remote.outputs.version }}"
-          git commit -m "Update to $remote"
-          git push
-
-      - name: Create release (version update)
-        if: steps.compare.outputs.skip == 'false' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          remote="${{ steps.remote.outputs.version }}"
-          gh release create "$remote" khipro.exe \
-            --title "Khipro Windows Portable - $remote" \
-            --notes "For the full changelog, see the [khipro-m17n release](https://github.com/rank-coder/khipro-m17n/releases/tag/${remote})."
-
-      - name: Update latest release asset (rebuild)
-        if: steps.compare.outputs.skip == 'true' && steps.tests.outcome == 'success' && steps.build_exe.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
-          if [ -z "$tag" ]; then
-            echo "ERROR: No existing release found"
+          if [ ! -s khipro.exe ]; then
+            echo "ERROR: khipro.exe was not produced" >&2
             exit 1
           fi
-          echo "Updating asset on existing release: $tag"
-          gh release delete-asset "$tag" khipro.exe --yes || true
-          gh release upload "$tag" khipro.exe --clobber
-          echo "Asset updated on release $tag"
+          file khipro.exe
+
+      # ─── Commit state + publish release ───────────────────────────
+      #
+      # Committing resources/khipro/ is harmless when lib_moved=false
+      # (git add is a no-op for unchanged paths); the conditional just
+      # produces a cleaner commit subject.
+
+      - name: Commit library bump + stamp .release-tag
+        if: steps.decide.outputs.release_needed == 'true' && steps.build_exe.outcome == 'success'
+        run: |
+          target="${{ steps.decide.outputs.target }}"
+          echo "$target" > .release-tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.decide.outputs.lib_moved }}" = "true" ]; then
+            git add resources/khipro .release-tag
+            git commit -m "Release $target (library ${{ steps.decide.outputs.lib_tag }})"
+          else
+            git add .release-tag
+            git commit -m "Release $target (portable-only bump)"
+          fi
+          git push
+
+      - name: Create release
+        if: steps.decide.outputs.release_needed == 'true' && steps.build_exe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          target="${{ steps.decide.outputs.target }}"
+          lib_tag="${{ steps.decide.outputs.lib_tag }}"
+          gh release create "$target" khipro.exe \
+            --title "Khipro Windows Portable - $target" \
+            --notes "Built against [khipro library $lib_tag](https://github.com/KhiproTeam/library/releases/tag/${lib_tag})."
+
+      # ─── Result ───────────────────────────────────────────────────
 
       - name: Set result
         id: result
         if: always()
         run: |
-          if [ "${{ steps.tests.outcome }}" != "success" ] || [ "${{ steps.build_exe.outcome }}" != "success" ]; then
+          if [ "${{ steps.build_exe.outcome }}" = "failure" ]; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
-          elif [ "${{ steps.compare.outputs.skip }}" = "true" ]; then
-            echo "status=rebuilt" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.decide.outputs.release_needed }}" != "true" ]; then
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
           else
             echo "status=released" >> "$GITHUB_OUTPUT"
           fi

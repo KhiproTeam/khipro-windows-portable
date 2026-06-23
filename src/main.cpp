@@ -7,11 +7,11 @@
 #include <shellapi.h>
 
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <vector>
 
-#include "mim_engine.h"
+#include <khipro/khipro.h>
+
 #include "resources.h"
 
 namespace {
@@ -26,7 +26,6 @@ bool g_enabled = false;
 bool g_injecting = false;
 HWND g_last_focus = nullptr;
 
-std::unique_ptr<khipro::KhiproEngine> g_engine;
 std::string g_input_buffer;
 std::wstring g_rendered_output;
 
@@ -56,24 +55,29 @@ std::string WideToUtf8(const std::wstring& s) {
   return out;
 }
 
-std::string LoadEmbeddedMim() {
-  HRSRC resource = FindResourceW(g_instance, MAKEINTRESOURCEW(IDR_MIM), RT_RCDATA);
-  if (!resource) {
+std::string KhiproConvert(const std::string& input) {
+  if (input.empty()) {
     return {};
   }
-  HGLOBAL loaded = LoadResource(g_instance, resource);
-  if (!loaded) {
+  const int required = khipro_convert(KHIPRO_VARIANT_DEFAULT, input.c_str(), nullptr, 0);
+  if (required <= 0) {
     return {};
   }
-  DWORD size = SizeofResource(g_instance, resource);
-  if (size == 0) {
-    return {};
+  std::vector<char> buf(static_cast<size_t>(required));
+  khipro_convert(KHIPRO_VARIANT_DEFAULT, input.c_str(), buf.data(), required);
+  return std::string(buf.data(), static_cast<size_t>(required - 1));
+}
+
+bool PopLastUtf8Codepoint(std::string* s) {
+  if (!s || s->empty()) {
+    return false;
   }
-  const void* ptr = LockResource(loaded);
-  if (!ptr) {
-    return {};
+  size_t i = s->size() - 1;
+  while (i > 0 && (((*s)[i] & 0xC0) == 0x80)) {
+    --i;
   }
-  return std::string(static_cast<const char*>(ptr), static_cast<size_t>(size));
+  s->erase(i);
+  return true;
 }
 
 void SendBackspaces(size_t count) {
@@ -126,9 +130,6 @@ void SendUnicodeText(const std::wstring& text) {
 void ResetCompositionState() {
   g_input_buffer.clear();
   g_rendered_output.clear();
-  if (g_engine) {
-    g_engine->Reset();
-  }
 }
 
 void ApplyCompositionDelta(const std::wstring& next) {
@@ -150,10 +151,7 @@ void ApplyCompositionDelta(const std::wstring& next) {
 }
 
 void RecomputeAndApply() {
-  if (!g_engine) {
-    return;
-  }
-  const std::string converted = g_engine->Convert(g_input_buffer);
+  const std::string converted = KhiproConvert(g_input_buffer);
   ApplyCompositionDelta(Utf8ToWide(converted));
 }
 
@@ -205,9 +203,10 @@ bool VkToUtf8Char(DWORD vk, DWORD scan, std::string* out) {
 }
 
 std::wstring BuildTooltip() {
-  std::wstring tip = L"Khipro - The first compositional lowercase keyboard layout concept for Bangla\n";
-  tip += L"Version: " + Utf8ToWide(KHIPRO_VERSION) + L"\n";
-  tip += L"Status: " + (g_enabled ? std::wstring(L"Active") : std::wstring(L"Inactive"));
+  std::wstring tip = L"Khipro - Compositional Bangla Layout\n";
+  tip += L"Version: " +
+         Utf8ToWide(std::string(khipro_library_version()) + "-" + KHIPRO_PORTABLE_PATCH) + L"\n";
+  tip += L"Status:  " + (g_enabled ? std::wstring(L"Active") : std::wstring(L"Inactive"));
   return tip;
 }
 
@@ -281,7 +280,7 @@ LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (g_input_buffer.empty()) {
       return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
     }
-    khipro::PopLastUtf8Codepoint(&g_input_buffer);
+    PopLastUtf8Codepoint(&g_input_buffer);
     RecomputeAndApply();
     return 1;
   }
@@ -361,14 +360,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   }
 
   g_instance = instance;
-
-  std::string mim = LoadEmbeddedMim();
-  if (mim.empty()) {
-    MessageBoxW(nullptr, L"Failed to load embedded bn-khipro.mim", L"Khipro", MB_ICONERROR | MB_OK);
-    return 1;
-  }
-
-  g_engine = std::make_unique<khipro::KhiproEngine>(mim);
 
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;

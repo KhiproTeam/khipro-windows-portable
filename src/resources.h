@@ -3,11 +3,14 @@
 
 #pragma once
 
-#define KHIPRO_VERSION "v35.0.1"
+// Portable-only patch. Bumped manually when this portable changes between
+// library releases. Resets to "1" when the linked khipro library version moves.
+// Full portable version = "<khipro_library_version()>-<KHIPRO_PORTABLE_PATCH>",
+// e.g. "35.0.1-1-1" = layout 35.0.1, library patch 1, portable patch 1.
+#define KHIPRO_PORTABLE_PATCH "1"
 
 #define IDI_ACTIVE 101
 #define IDI_INACTIVE 102
-#define IDR_MIM 201
 
 #define IDM_TOGGLE 40001
 #define IDM_EXIT 40002
