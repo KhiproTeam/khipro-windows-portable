@@ -1,7 +1,7 @@
 name: Check & Release
 
 # Triggers:
-#   - daily cron: polls KhiproTeam/library for a new release
+#   - daily cron: polls KhiproTeam/khipro-library for a new release
 #   - push to main: fires immediately when the portable patch
 #     (src/resources.h) or the vendored library (resources/khipro/)
 #     changes — so manual bumps don't wait for the next daily run
@@ -69,12 +69,12 @@ jobs:
 
       # ─── Poll upstream ────────────────────────────────────────────
 
-      - name: Get latest tag from KhiproTeam/library
+      - name: Get latest tag from KhiproTeam/khipro-library
         id: latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          latest=$(gh api repos/KhiproTeam/library/releases/latest --jq '.tag_name')
+          latest=$(gh api repos/KhiproTeam/khipro-library/releases/latest --jq '.tag_name')
           if [ -z "$latest" ]; then
             echo "ERROR: could not resolve latest library tag" >&2
             exit 1
@@ -185,7 +185,7 @@ jobs:
           lib_tag="${{ steps.decide.outputs.lib_tag }}"
           gh release create "$target" khipro.exe \
             --title "Khipro Windows Portable - $target" \
-            --notes "Built against [khipro library $lib_tag](https://github.com/KhiproTeam/library/releases/tag/${lib_tag})."
+            --notes "Built against [khipro library $lib_tag](https://github.com/KhiproTeam/khipro-library/releases/tag/${lib_tag})."
 
       # ─── Result ───────────────────────────────────────────────────
 

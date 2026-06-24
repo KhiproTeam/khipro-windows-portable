@@ -17,7 +17,7 @@ WIN_DIR = $(BUILD_DIR)/win
 
 # Default: offline build against the vendored library in resources/khipro/.
 # No network access required. Run `make update-lib` to refresh the vendored
-# artifact from KhiproTeam/library's latest release.
+# artifact from KhiproTeam/khipro-library's latest release.
 all: khipro.exe
 
 $(WIN_DIR):

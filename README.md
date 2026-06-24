@@ -4,7 +4,7 @@
 
 Khipro is the first compositional lowercase keyboard layout concept for Bengali, designed to be the fastest typing method for Bengali. It uses a fixed-phonetic approach where you type Latin characters and they are composited into Bengali script in real time.
 
-The input method engine is implemented by the cross-platform [khipro library](https://github.com/KhiproTeam/library). This repository is a Windows portable build that wraps the same engine into a standalone system tray application — no installer, no dependencies, just run the exe.
+The input method engine is implemented by the cross-platform [khipro library](https://github.com/KhiproTeam/khipro-library). This repository is a Windows portable build that wraps the same engine into a standalone system tray application — no installer, no dependencies, just run the exe.
 
 ## Usage
 
@@ -48,7 +48,7 @@ make          # offline cross-compile → khipro.exe
 
 ### Refreshing the vendored library
 
-To pull the latest release from [KhiproTeam/library](https://github.com/KhiproTeam/library/releases) and overwrite `resources/khipro/`:
+To pull the latest release from [KhiproTeam/khipro-library](https://github.com/KhiproTeam/khipro-library/releases) and overwrite `resources/khipro/`:
 
 ```
 make update-lib
@@ -74,4 +74,4 @@ Two ways the tag moves: (1) the library releases a new version (CI auto-bumps `r
 
 ## License
 
-[Mozilla Public License v2.0](LICENSE) (MPL-2.0). `khipro.exe` statically links the [khipro library](https://github.com/KhiproTeam/library), which is MIT-licensed.
+[Mozilla Public License v2.0](LICENSE) (MPL-2.0). `khipro.exe` statically links the [khipro library](https://github.com/KhiproTeam/khipro-library), which is MIT-licensed.

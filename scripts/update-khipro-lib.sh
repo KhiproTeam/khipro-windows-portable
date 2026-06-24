@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Update the vendored khipro library artifact in resources/khipro/.
 #
-# Always fetches the latest release from KhiproTeam/library and overwrites:
+# Always fetches the latest release from KhiproTeam/khipro-library and overwrites:
 #   resources/khipro/include/khipro/khipro.h
 #   resources/khipro/lib/libkhipro.a
 #   resources/khipro/.tag                  (the library tag, e.g. "v35.0.1-1")
@@ -13,7 +13,7 @@
 #   - CI:     daily poll runs this when resources/khipro/.tag is behind latest
 set -euo pipefail
 
-OWNER_REPO="KhiproTeam/library"
+OWNER_REPO="KhiproTeam/khipro-library"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${ROOT}/resources/khipro"
 
