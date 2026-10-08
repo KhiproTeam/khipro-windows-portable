@@ -2,6 +2,8 @@ name: Check & Release
 
 # Triggers:
 #   - daily cron: polls KhiproTeam/khipro-library for a new release
+#     (stable or pre-release — a pre-release is published as a
+#     portable pre-release, never as "latest")
 #   - push to main: fires immediately when the portable patch
 #     (src/resources.h) or the vendored library (resources/khipro/)
 #     changes — so manual bumps don't wait for the next daily run
@@ -69,17 +71,26 @@ jobs:
 
       # ─── Poll upstream ────────────────────────────────────────────
 
-      - name: Get latest tag from KhiproTeam/khipro-library
+      # Newest release (pre-releases included, drafts skipped). Following
+      # a pre-release here is deliberate: the portable then publishes
+      # itself as a pre-release too, never as "latest" (see the
+      # Create release step).
+      - name: Get newest library release from KhiproTeam/khipro-library
         id: latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          latest=$(gh api repos/KhiproTeam/khipro-library/releases/latest --jq '.tag_name')
-          if [ -z "$latest" ]; then
-            echo "ERROR: could not resolve latest library tag" >&2
+          release=$(gh api 'repos/KhiproTeam/khipro-library/releases?per_page=10' \
+            --jq '[.[] | select(.draft == false)][0]')
+          latest=$(jq -r '.tag_name // empty' <<<"$release")
+          prerelease=$(jq -r '.prerelease // false' <<<"$release")
+          if [ -z "$latest" ] || [ "$latest" = "null" ]; then
+            echo "ERROR: could not resolve latest library release" >&2
             exit 1
+          else
+            echo "tag=$latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           fi
-          echo "tag=$latest" >> "$GITHUB_OUTPUT"
 
       # ─── Decide ───────────────────────────────────────────────────
       #
@@ -87,11 +98,14 @@ jobs:
       # from the last released portable tag? If not, exit early and
       # skip update + build + release entirely.
       #
-      # target_tag uses the *latest* library tag if the vendored one
-      # is behind; otherwise the vendored one. This way:
-      #   - library bump on upstream    → target differs → release
-      #   - portable-patch bump in repo → target differs → release
-      #   - nothing changed             → target matches  → skip all
+      # target_tag uses the *newest* library tag (stable or pre-release)
+      # if the vendored one differs; otherwise the vendored one. This way:
+      #   - library release on upstream (stable or beta) → target differs → release
+      #   - portable-patch bump in repo  → target differs → release
+      #   - nothing changed              → target matches  → skip all
+      #
+      # While a beta is the newest library release the portable tracks it
+      # (and publishes as a pre-release); a newer stable wins again.
 
       - name: Decide
         id: decide
@@ -136,7 +150,7 @@ jobs:
         if: steps.decide.outputs.release_needed == 'true' && steps.decide.outputs.lib_moved == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/update-khipro-lib.sh
+        run: bash scripts/update-khipro-lib.sh "${{ steps.decide.outputs.lib_tag }}"
 
       # ─── Build (only when releasing) ──────────────────────────────
 
@@ -183,9 +197,22 @@ jobs:
         run: |
           target="${{ steps.decide.outputs.target }}"
           lib_tag="${{ steps.decide.outputs.lib_tag }}"
+          flags=()
+          if [ "${{ steps.latest.outputs.prerelease }}" = "true" ]; then
+            flags+=(--prerelease)
+          else
+            flags+=(--latest)
+          fi
+          notes="Built against [khipro library $lib_tag](https://github.com/KhiproTeam/khipro-library/releases/tag/${lib_tag})."
+          if [ "${{ steps.latest.outputs.prerelease }}" = "true" ]; then
+            notes="$notes
+
+          ⚠️ Built from a **pre-release** of the khipro library — this portable release is published as a beta and is **not** marked as latest."
+          fi
           gh release create "$target" khipro.exe \
+            "${flags[@]}" \
             --title "Khipro Windows Portable - $target" \
-            --notes "Built against [khipro library $lib_tag](https://github.com/KhiproTeam/khipro-library/releases/tag/${lib_tag})."
+            --notes "$notes"
 
       # ─── Result ───────────────────────────────────────────────────
 

@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 # Update the vendored khipro library artifact in resources/khipro/.
 #
-# Always fetches the latest release from KhiproTeam/khipro-library and overwrites:
+# Fetches the newest release (stable or pre-release) from
+# KhiproTeam/khipro-library and overwrites:
 #   resources/khipro/include/khipro/khipro.h
 #   resources/khipro/lib/libkhipro.a
 #   resources/khipro/.tag                  (the library tag, e.g. "v35.0.1-1")
 #
 # The DLL and import lib (.dll.a) are skipped — this portable is static-only.
 #
+# Usage:
+#   update-khipro-lib.sh [TAG]
+#     TAG       vendored explicitly (e.g. "v36.6.1-beta-0"); the release
+#               must exist and carry a *-windows-x86_64.zip asset
+#     (none)    newest non-draft release, pre-releases included
+#
 # Use cases:
 #   - Manual: developer runs `make update-lib` to pull a new library release
-#   - CI:     daily poll runs this when resources/khipro/.tag is behind latest
+#   - CI:     daily poll runs this with the tag it decided on
 set -euo pipefail
 
 OWNER_REPO="KhiproTeam/khipro-library"
@@ -30,13 +37,19 @@ if ! command -v unzip >/dev/null 2>&1; then
   exit 1
 fi
 
-latest_tag=$(gh api "repos/${OWNER_REPO}/releases/latest" --jq '.tag_name')
-if [[ -z "$latest_tag" ]]; then
+tag_arg="${1:-}"
+if [[ -n "$tag_arg" ]]; then
+  latest_tag="$tag_arg"
+else
+  latest_tag=$(gh api "repos/${OWNER_REPO}/releases?per_page=10" \
+    --jq '[.[] | select(.draft == false)][0].tag_name')
+fi
+if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
   echo "ERROR: could not determine latest release tag" >&2
   exit 1
 fi
 
-asset_url=$(gh api "repos/${OWNER_REPO}/releases/latest" \
+asset_url=$(gh api "repos/${OWNER_REPO}/releases/tags/${latest_tag}" \
   --jq '.assets[] | select(.name | endswith("-windows-x86_64.zip")) | .browser_download_url')
 if [[ -z "$asset_url" ]]; then
   echo "ERROR: latest release has no windows-x86_64.zip asset" >&2

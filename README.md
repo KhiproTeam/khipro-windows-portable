@@ -68,6 +68,8 @@ Reset [`KHIPRO_PORTABLE_PATCH`](src/resources.h) back to `"1"` whenever the libr
 
 Two ways the tag moves: (1) the library releases a new version (CI auto-bumps `resources/khipro/`), or (2) you bump `KHIPRO_PORTABLE_PATCH` for a portable-only change. Either triggers a release; nothing else does.
 
+**Pre-releases:** the flow follows the library's *newest* release, beta or stable. When the newest library release is a pre-release, the portable publishes a matching **pre-release** (never marked as "latest" — the [latest release](https://github.com/KhiproTeam/khipro-windows-portable/releases/latest) link always points at the newest stable build). A newer stable release wins again.
+
 ## Contributors
 
 ![Contributors](https://contrib.rocks/image?repo=KhiproTeam/khipro-windows-portable)
