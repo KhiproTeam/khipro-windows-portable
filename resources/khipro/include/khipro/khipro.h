@@ -1,6 +1,14 @@
 #ifndef KHIPRO_H
 #define KHIPRO_H
 
+/* Version macros - stamped by the khipro-library build from khipro.meta. */
+#ifndef KHIPRO_LAYOUT_VERSION
+#define KHIPRO_LAYOUT_VERSION "36.6.1-beta"
+#endif
+#ifndef KHIPRO_LIBRARY_VERSION
+#define KHIPRO_LIBRARY_VERSION "36.6.1-beta-0"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
