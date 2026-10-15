@@ -15,11 +15,6 @@
 
 #include "resources.h"
 
-// Stamped by CI via `make PORTABLE_VERSION=<n>`; local builds report "dev".
-#ifndef KHIPRO_PORTABLE_VERSION
-#define KHIPRO_PORTABLE_VERSION "dev"
-#endif
-
 // Diagnostic hotkey-trace logging to khipro.log next to the exe.
 // Build with `make KHIPRO_HOTKEY_DEBUG=1`; compiled out otherwise.
 #ifdef KHIPRO_HOTKEY_DEBUG

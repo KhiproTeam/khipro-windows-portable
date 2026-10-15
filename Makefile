@@ -9,14 +9,6 @@ WIN_CXXFLAGS = -std=c++17 -Os -DNDEBUG -DUNICODE -D_UNICODE -Wall -Wextra \
                -ffunction-sections -fdata-sections -fno-rtti \
                -I$(LIB_INCLUDE)
 
-# Stamp the portable release version into the exe. CI passes this; unset for
-# local builds → the exe reports "dev".
-PORTABLE_VERSION ?=
-
-ifneq ($(PORTABLE_VERSION),)
-WIN_CXXFLAGS += -DKHIPRO_PORTABLE_VERSION=\"$(PORTABLE_VERSION)\"
-endif
-
 # Diagnostic: log the hotkey/capture flow to khipro.log next to the exe.
 KHIPRO_HOTKEY_DEBUG ?=
 

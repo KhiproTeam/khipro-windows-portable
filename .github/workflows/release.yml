@@ -1,15 +1,13 @@
-name: Check & Release
+name: Release
 
-# Triggers:
-#   - push to main touching src/** or resources/khipro/** → always releases
-#     under the next version counter (v1, v2, ...)
-#   - daily cron / manual dispatch → release only when the vendored library
-#     tag differs from the newest upstream release (beta or stable; a beta
-#     publishes as a pre-release, never as "latest")
-#   - the release commit carries [skip ci] so it can never re-trigger
+# Publishes a release tagged v<version> — the version read from
+# src/resources.h (KHIPRO_PORTABLE_VERSION) — but only when that tag does
+# not exist yet. Bumping the version is what cuts a release; a push whose
+# v<version> already exists is skipped entirely.
+#
+# Triggers: push to main touching src/** or resources/khipro/**, or manual
+# dispatch (also useful to retry a failed publish).
 on:
-  schedule:
-    - cron: '17 0 * * *'
   workflow_dispatch:
   push:
     branches: [main]
@@ -21,7 +19,7 @@ permissions:
   contents: write
 
 jobs:
-  check-and-release:
+  release:
     runs-on: ubuntu-latest
     outputs:
       status: ${{ steps.result.outputs.status }}
@@ -32,113 +30,62 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64 \
-            curl unzip
+          sudo apt-get install -y g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
 
-      # ─── Read repo state ──────────────────────────────────────────
+      # ─── Version to release ───────────────────────────────────────
 
-      # The version counter. Legacy composite tags (v36.6.1-beta-0-1) or a
-      # missing file start the counter fresh at 1.
-      - name: Read last released counter (.release-tag)
-        id: last
+      - name: Read portable version (src/resources.h)
+        id: version
         run: |
-          if [ -f .release-tag ]; then
-            last=$(tr -d '[:space:]' < .release-tag)
-          else
-            last="none"
-          fi
-          if [[ "$last" =~ ^v([0-9]+)$ ]]; then
-            next=$((BASH_REMATCH[1] + 1))
-          else
-            next=1
-          fi
-          echo "last=$last" >> "$GITHUB_OUTPUT"
-          echo "next=$next" >> "$GITHUB_OUTPUT"
-
-      - name: Read vendored library tag (resources/khipro/.tag)
-        id: vendored
-        run: |
-          if [ -f resources/khipro/.tag ]; then
-            tag=$(tr -d '[:space:]' < resources/khipro/.tag)
-          else
-            tag="none"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      # ─── Poll upstream ────────────────────────────────────────────
-
-      - name: Get newest library release from KhiproTeam/khipro-library
-        id: latest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          release=$(gh api 'repos/KhiproTeam/khipro-library/releases?per_page=10' \
-            --jq '[.[] | select(.draft == false)][0]')
-          latest=$(jq -r '.tag_name // empty' <<<"$release")
-          prerelease=$(jq -r '.prerelease // false' <<<"$release")
-          if [ -z "$latest" ] || [ "$latest" = "null" ]; then
-            echo "ERROR: could not resolve latest library release" >&2
+          version=$(grep -oP '(?<=#define KHIPRO_PORTABLE_VERSION ")[^"]+' src/resources.h)
+          if [ -z "$version" ]; then
+            echo "ERROR: KHIPRO_PORTABLE_VERSION not found in src/resources.h" >&2
             exit 1
           fi
-          echo "tag=$latest" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target=v${version}" >> "$GITHUB_OUTPUT"
 
-      # ─── Decide ───────────────────────────────────────────────────
-      #
-      # release_needed = push-triggered (release-worthy path changed) → always
-      #                  schedule/dispatch                → only if library moved
+      # ─── Skip when this version is already released ───────────────
 
-      - name: Decide
-        id: decide
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          vendored="${{ steps.vendored.outputs.tag }}"
-          latest="${{ steps.latest.outputs.tag }}"
-          next="${{ steps.last.outputs.next }}"
-
-          lib_moved="false"
-          if [ "$vendored" != "$latest" ]; then
-            lib_moved="true"
-          fi
-
-          release_needed="false"
-          if [ "$EVENT_NAME" = "push" ] || [ "$lib_moved" = "true" ]; then
-            release_needed="true"
-          fi
-
-          echo "lib_moved=$lib_moved"           >> "$GITHUB_OUTPUT"
-          echo "release_needed=$release_needed" >> "$GITHUB_OUTPUT"
-          echo "target=v${next}"                >> "$GITHUB_OUTPUT"
-
-          if [ "$release_needed" = "true" ]; then
-            echo "Release needed: v${next} (lib_moved=${lib_moved}, event=${EVENT_NAME})"
-          else
-            echo "No release needed: library unchanged (${vendored})."
-          fi
-
-      - name: Nothing to do
-        if: steps.decide.outputs.release_needed != 'true'
-        run: echo "Skipping. Library unchanged and no release-worthy push."
-
-      # ─── Refresh vendored library (only if upstream moved) ────────
-
-      - name: Update vendored library
-        if: steps.decide.outputs.release_needed == 'true' && steps.decide.outputs.lib_moved == 'true'
+      - name: Check for existing release
+        id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/update-khipro-lib.sh "${{ steps.latest.outputs.tag }}"
+        run: |
+          target="${{ steps.version.outputs.target }}"
+          if gh api "repos/${{ github.repository }}/releases/tags/${target}" >/dev/null 2>&1; then
+            echo "Release ${target} already exists — nothing to do. Bump the version to cut a new release."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release ${target} does not exist yet — building."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      # ─── Shipped versions (mandatory) ─────────────────────────────
-      #
-      # Every release post must show what ships in the exe. These come from
-      # the build-stamped macros in the vendored header; a header without
-      # them (e.g. taken from a repo checkout) aborts the release.
+      # ─── Release context (vendored library, shipped versions) ─────
 
+      - name: Read vendored library tag
+        id: vendored
+        if: steps.check.outputs.released == 'false'
+        run: |
+          tag=$(tr -d '[:space:]' < resources/khipro/.tag)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Read library prerelease flag
+        id: lib
+        if: steps.check.outputs.released == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease=$(gh api "repos/KhiproTeam/khipro-library/releases/tags/${{ steps.vendored.outputs.tag }}" \
+            --jq '.prerelease // false')
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      # Mandatory: every release post must show what ships in the exe.
+      # A header without the macros (e.g. vendored from a repo checkout
+      # instead of the release zip) aborts the release.
       - name: Read shipped versions from vendored header
         id: versions
-        if: steps.decide.outputs.release_needed == 'true'
+        if: steps.check.outputs.released == 'false'
         run: |
           header="resources/khipro/include/khipro/khipro.h"
           lib=$(grep -oP '(?<=#define KHIPRO_LIBRARY_VERSION ")[^"]+' "$header") || true
@@ -157,11 +104,11 @@ jobs:
 
       - name: Build Windows executable
         id: build_exe
-        if: steps.decide.outputs.release_needed == 'true'
-        run: make PORTABLE_VERSION="${{ steps.last.outputs.next }}"
+        if: steps.check.outputs.released == 'false'
+        run: make
 
       - name: Verify executable
-        if: steps.decide.outputs.release_needed == 'true'
+        if: steps.check.outputs.released == 'false'
         run: |
           if [ ! -s khipro.exe ]; then
             echo "ERROR: khipro.exe was not produced" >&2
@@ -169,41 +116,21 @@ jobs:
           fi
           file khipro.exe
 
-      # ─── Commit state + publish release ───────────────────────────
-      #
-      # [skip ci] matters: a library move commits resources/khipro/**, which
-      # is a release trigger path. Without it the workflow would re-trigger
-      # and burn a second version number.
-
-      - name: Commit library bump + counter
-        if: steps.decide.outputs.release_needed == 'true' && steps.build_exe.outcome == 'success'
-        run: |
-          target="${{ steps.decide.outputs.target }}"
-          echo "$target" > .release-tag
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ "${{ steps.decide.outputs.lib_moved }}" = "true" ]; then
-            git add resources/khipro .release-tag
-            git commit -m "Release $target (library ${{ steps.latest.outputs.tag }}) [skip ci]"
-          else
-            git add .release-tag
-            git commit -m "Release $target [skip ci]"
-          fi
-          git push
+      # ─── Publish ──────────────────────────────────────────────────
 
       - name: Create release
-        if: steps.decide.outputs.release_needed == 'true' && steps.build_exe.outcome == 'success'
+        if: steps.check.outputs.released == 'false' && steps.build_exe.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          target="${{ steps.decide.outputs.target }}"
-          lib_tag="${{ steps.latest.outputs.tag }}"
+          target="${{ steps.version.outputs.target }}"
+          lib_tag="${{ steps.vendored.outputs.tag }}"
           lib_ver="${{ steps.versions.outputs.lib }}"
           classic_ver="${{ steps.versions.outputs.classic }}"
           dark_ver="${{ steps.versions.outputs.dark }}"
 
           flags=()
-          if [ "${{ steps.latest.outputs.prerelease }}" = "true" ]; then
+          if [ "${{ steps.lib.outputs.prerelease }}" = "true" ]; then
             flags+=(--prerelease)
           else
             flags+=(--latest)
@@ -217,16 +144,17 @@ jobs:
           | Classic layout | ${classic_ver} |
           | Dark layout | ${dark_ver} |"
 
-          if [ "${{ steps.latest.outputs.prerelease }}" = "true" ]; then
+          prev=$(gh api "repos/${{ github.repository }}/releases?per_page=1" --jq '.[0].tag_name // empty')
+          if [ -n "$prev" ]; then
+            notes="$notes
+
+          **Full Changelog**: https://github.com/KhiproTeam/khipro-windows-portable/compare/${prev}...${target}"
+          fi
+
+          if [ "${{ steps.lib.outputs.prerelease }}" = "true" ]; then
             notes="$notes
 
           ⚠️ Built from a **pre-release** of the khipro library — this portable release is published as a beta and is **not** marked as latest."
-          fi
-
-          if [ -f .github/release-notes-extra.md ]; then
-            notes="$notes
-
-          $(cat .github/release-notes-extra.md)"
           fi
 
           gh release create "$target" khipro.exe \
@@ -242,8 +170,8 @@ jobs:
         run: |
           if [ "${{ steps.build_exe.outcome }}" = "failure" ]; then
             echo "status=failed" >> "$GITHUB_OUTPUT"
-          elif [ "${{ steps.decide.outputs.release_needed }}" != "true" ]; then
-            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.check.outputs.released }}" = "true" ]; then
+            echo "status=already-released" >> "$GITHUB_OUTPUT"
           else
             echo "status=released" >> "$GITHUB_OUTPUT"
           fi

@@ -1,0 +1,113 @@
+name: Sync library
+
+# Polls KhiproTeam/khipro-library for a new release. When one appears it
+# vendors it into resources/khipro/, bumps the portable version in
+# src/resources.h (minor bump), and pushes a single commit — which the
+# release workflow then picks up to cut the release.
+#
+# Runs on a schedule and manually; never on push (the release workflow
+# owns push events, so this cannot loop).
+on:
+  schedule:
+    - cron: '17 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
+
+      - name: Read vendored library tag
+        id: vendored
+        run: |
+          if [ -f resources/khipro/.tag ]; then
+            tag=$(tr -d '[:space:]' < resources/khipro/.tag)
+          else
+            tag="none"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Newest non-draft release, pre-releases included: following a beta
+      # here is deliberate — the release workflow then publishes the
+      # portable as a pre-release too, never as "latest".
+      - name: Get newest library release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release=$(gh api 'repos/KhiproTeam/khipro-library/releases?per_page=10' \
+            --jq '[.[] | select(.draft == false)][0]')
+          latest=$(jq -r '.tag_name // empty' <<<"$release")
+          if [ -z "$latest" ] || [ "$latest" = "null" ]; then
+            echo "ERROR: could not resolve latest library release" >&2
+            exit 1
+          fi
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: decide
+        run: |
+          vendored="${{ steps.vendored.outputs.tag }}"
+          latest="${{ steps.latest.outputs.tag }}"
+          if [ "$vendored" = "$latest" ]; then
+            echo "Already vendored at ${vendored}."
+            echo "sync_needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Library moved: ${vendored} → ${latest}."
+            echo "sync_needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Vendor new library
+        if: steps.decide.outputs.sync_needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/update-khipro-lib.sh "${{ steps.latest.outputs.tag }}"
+
+      # Minor bump: 1.8 → 1.9. A library update always cuts a new release.
+      - name: Bump portable version
+        id: bump
+        if: steps.decide.outputs.sync_needed == 'true'
+        run: |
+          cur=$(grep -oP '(?<=#define KHIPRO_PORTABLE_VERSION ")[^"]+' src/resources.h)
+          if [[ "$cur" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            newv="${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1))"
+          else
+            echo "ERROR: cannot parse current version '${cur}'" >&2
+            exit 1
+          fi
+          sed -i "s/#define KHIPRO_PORTABLE_VERSION \".*\"/#define KHIPRO_PORTABLE_VERSION \"${newv}\"/" src/resources.h
+          echo "Bumped ${cur} → ${newv}"
+          echo "version=${newv}" >> "$GITHUB_OUTPUT"
+
+      # No [skip ci] on purpose: this commit is what triggers the release
+      # workflow.
+      - name: Commit + push
+        if: steps.decide.outputs.sync_needed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add resources/khipro src/resources.h
+          git commit -m "Sync library ${{ steps.latest.outputs.tag }}, bump version to ${{ steps.bump.outputs.version }}"
+          git push
+
+      - name: Set result
+        id: result
+        if: always()
+        run: |
+          if [ "${{ steps.decide.outputs.sync_needed }}" = "true" ]; then
+            echo "status=synced" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=up-to-date" >> "$GITHUB_OUTPUT"
+          fi

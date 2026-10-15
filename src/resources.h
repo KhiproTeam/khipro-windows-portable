@@ -3,6 +3,10 @@
 
 #pragma once
 
+// Portable version. Shown in the tray tooltip; a release tag is "v" + this.
+// Bump it (or let the sync-library workflow bump it) to cut a release.
+#define KHIPRO_PORTABLE_VERSION "1.8"
+
 // Icon resource IDs.
 #define IDI_ACTIVE 101
 #define IDI_INACTIVE 102
