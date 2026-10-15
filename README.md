@@ -58,8 +58,11 @@ The library artifact (`khipro.h` + `libkhipro.a`) is **vendored** in [`resources
 **Prerequisites:** `g++-mingw-w64-x86-64` and `gcc-mingw-w64-x86-64` for cross-compiling. (Add `gh`, `curl`, `unzip` only if you intend to refresh the vendored library.)
 
 ```
-make          # offline cross-compile → khipro.exe
+make          # offline cross-compile → khipro.exe (release build — no debug logging)
+make debug    # developer diagnostic build → also logs the hotkey/capture flow to khipro.log
 ```
+
+`make debug` is for local debugging only; CI always builds the release path, so released exes never contain the debug logging.
 
 ### Refreshing the vendored library
 

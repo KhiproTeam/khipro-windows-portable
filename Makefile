@@ -55,4 +55,11 @@ update-lib:
 clean:
 	rm -rf $(BUILD_DIR) khipro.exe
 
-.PHONY: all update-lib clean
+# Developer diagnostic build: logs the hotkey/capture flow to khipro.log
+# next to the exe. For local debugging only — never released (CI always
+# builds the plain release path).
+debug:
+	$(MAKE) clean
+	$(MAKE) KHIPRO_HOTKEY_DEBUG=1
+
+.PHONY: all update-lib debug clean
