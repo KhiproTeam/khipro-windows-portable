@@ -5,13 +5,13 @@
 # KhiproTeam/khipro-library and overwrites:
 #   resources/khipro/include/khipro/khipro.h
 #   resources/khipro/lib/libkhipro.a
-#   resources/khipro/.tag                  (the library tag, e.g. "v35.0.1-1")
+#   resources/khipro/.tag                  (the library tag, e.g. "lib-v2.0.0")
 #
 # The DLL and import lib (.dll.a) are skipped — this portable is static-only.
 #
 # Usage:
 #   update-khipro-lib.sh [TAG]
-#     TAG       vendored explicitly (e.g. "v36.6.1-beta-0"); the release
+#     TAG       vendored explicitly (e.g. "lib-v2.0.0"); the release
 #               must exist and carry a *-windows-x86_64.zip asset
 #     (none)    newest non-draft release, pre-releases included
 #

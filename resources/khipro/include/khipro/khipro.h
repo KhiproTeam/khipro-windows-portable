@@ -2,11 +2,20 @@
 #define KHIPRO_H
 
 /* Version macros - stamped by the khipro-library build from khipro.meta. */
-#ifndef KHIPRO_LAYOUT_VERSION
-#define KHIPRO_LAYOUT_VERSION "36.6.1-beta"
-#endif
 #ifndef KHIPRO_LIBRARY_VERSION
-#define KHIPRO_LIBRARY_VERSION "36.6.1-beta-0"
+#define KHIPRO_LIBRARY_VERSION "2.0.0"
+#endif
+#ifndef KHIPRO_CLASSIC_VERSION
+#define KHIPRO_CLASSIC_VERSION "37.0.1"
+#endif
+#ifndef KHIPRO_TOUCHSCREEN_CLASSIC_VERSION
+#define KHIPRO_TOUCHSCREEN_CLASSIC_VERSION "37.0.1"
+#endif
+#ifndef KHIPRO_DARK_VERSION
+#define KHIPRO_DARK_VERSION "1.1.0"
+#endif
+#ifndef KHIPRO_TOUCHSCREEN_DARK_VERSION
+#define KHIPRO_TOUCHSCREEN_DARK_VERSION "1.1.0"
 #endif
 
 #ifdef __cplusplus
@@ -30,8 +39,10 @@ extern "C" {
 #endif
 
 typedef enum {
-  KHIPRO_VARIANT_DEFAULT = 0,
-  KHIPRO_VARIANT_TOUCHSCREEN = 1
+  KHIPRO_VARIANT_CLASSIC = 0,
+  KHIPRO_VARIANT_CLASSIC_TOUCH = 1,
+  KHIPRO_VARIANT_DARK = 2,
+  KHIPRO_VARIANT_DARK_TOUCH = 3
 } khipro_variant;
 
 typedef struct khipro_engine khipro_engine;

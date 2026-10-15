@@ -59,12 +59,12 @@ std::string KhiproConvert(const std::string& input) {
   if (input.empty()) {
     return {};
   }
-  const int required = khipro_convert(KHIPRO_VARIANT_DEFAULT, input.c_str(), nullptr, 0);
+  const int required = khipro_convert(KHIPRO_VARIANT_CLASSIC, input.c_str(), nullptr, 0);
   if (required <= 0) {
     return {};
   }
   std::vector<char> buf(static_cast<size_t>(required));
-  khipro_convert(KHIPRO_VARIANT_DEFAULT, input.c_str(), buf.data(), required);
+  khipro_convert(KHIPRO_VARIANT_CLASSIC, input.c_str(), buf.data(), required);
   return std::string(buf.data(), static_cast<size_t>(required - 1));
 }
 
