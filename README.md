@@ -14,10 +14,22 @@ The input method engine is implemented by the cross-platform [khipro library](ht
    - `Ctrl+Space`
    - Left-click the tray icon
    - Right-click the tray icon and select Active/Inactive
-4. **Switch layout (Classic / Dark):** right-click the tray icon and pick one — the radio dot marks the active layout. Your choice is remembered in `khipro.cfg` next to the exe, created automatically on the first switch.
-5. **Exit:** Right-click the tray icon and select Exit
-6. **Auto-start on login:** `Win+R` > type `shell:startup` > copy `khipro.exe` into that folder
-7. Hover the tray icon to see versions, the active layout, and status
+4. **Switch layout (Classic / Dark):** right-click the tray icon and pick one — the radio dot marks the active layout.
+5. **Change the shortcut:** right-click the tray icon → **Change shortcut (…)** → press the new combination (must include Ctrl, Alt or Win). `Esc` cancels, and waiting times out after 10 seconds. If another app already uses the combo, you can try again immediately.
+6. **Exit:** Right-click the tray icon and select Exit
+7. **Auto-start on login:** `Win+R` > type `shell:startup` > copy `khipro.exe` into that folder
+8. Hover the tray icon to see versions, the active layout, and status
+
+## Configuration
+
+`khipro.cfg` is created next to the exe on your first layout or shortcut change:
+
+```
+layout=classic        # classic | dark
+hotkey=ctrl+space     # mods: ctrl alt shift win · keys: A-Z, 0-9, F1-F24, space, tab, enter, ...
+```
+
+Both lines are optional; a missing, garbled, or rejected line falls back to the default (Classic, `Ctrl+Space`). Delete the file to reset everything.
 
 ## Versioning
 

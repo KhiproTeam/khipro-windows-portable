@@ -38,6 +38,10 @@ enum class Layout { Classic, Dark };
 
 Layout g_layout = Layout::Classic;
 
+UINT g_hotkey_mods = MOD_CONTROL;
+UINT g_hotkey_vk = VK_SPACE;
+bool g_capturing = false;
+
 khipro_variant VariantFor(Layout layout) {
   return layout == Layout::Dark ? KHIPRO_VARIANT_DARK : KHIPRO_VARIANT_CLASSIC;
 }
@@ -82,6 +86,179 @@ std::string Trim(const std::string& s) {
   return s.substr(begin, end - begin + 1);
 }
 
+std::string Lower(std::string s) {
+  for (char& c : s) {
+    if (c >= 'A' && c <= 'Z') {
+      c += static_cast<char>('a' - 'A');
+    }
+  }
+  return s;
+}
+
+// ─── Hotkey naming / parsing (khipro.cfg "hotkey=ctrl+space") ─────────
+
+struct HotkeyName {
+  UINT vk;
+  const wchar_t* name;
+};
+
+const wchar_t* VkName(UINT vk) {
+  static const HotkeyName kNames[] = {
+      {VK_SPACE, L"Space"},   {VK_TAB, L"Tab"},     {VK_RETURN, L"Enter"},
+      {VK_BACK, L"Backspace"}, {VK_ESCAPE, L"Esc"},  {VK_INSERT, L"Ins"},
+      {VK_DELETE, L"Del"},    {VK_HOME, L"Home"},   {VK_END, L"End"},
+      {VK_PRIOR, L"PageUp"},  {VK_NEXT, L"PageDown"}, {VK_LEFT, L"Left"},
+      {VK_RIGHT, L"Right"},   {VK_UP, L"Up"},       {VK_DOWN, L"Down"},
+  };
+  for (const auto& n : kNames) {
+    if (n.vk == vk) {
+      return n.name;
+    }
+  }
+  return nullptr;
+}
+
+std::wstring HotkeyLabel(UINT mods, UINT vk) {
+  std::wstring s;
+  if (mods & MOD_CONTROL) s += L"Ctrl+";
+  if (mods & MOD_SHIFT) s += L"Shift+";
+  if (mods & MOD_ALT) s += L"Alt+";
+  if (mods & MOD_WIN) s += L"Win+";
+  if (vk >= 'A' && vk <= 'Z') {
+    s += static_cast<wchar_t>(L'A' + (vk - 'A'));
+  } else if (vk >= '0' && vk <= '9') {
+    s += static_cast<wchar_t>(L'0' + (vk - '0'));
+  } else if (vk >= VK_F1 && vk <= VK_F24) {
+    s += L"F" + std::to_wstring(vk - VK_F1 + 1);
+  } else if (const wchar_t* name = VkName(vk)) {
+    s += name;
+  } else {
+    wchar_t buf[16];
+    wsprintfW(buf, L"0x%02X", vk);
+    s += buf;
+  }
+  return s;
+}
+
+bool HexToUint(const std::string& s, UINT* out) {
+  if (s.empty() || s.size() > 4) {
+    return false;
+  }
+  UINT v = 0;
+  for (char c : s) {
+    int d;
+    if (c >= '0' && c <= '9') {
+      d = c - '0';
+    } else if (c >= 'a' && c <= 'f') {
+      d = c - 'a' + 10;
+    } else if (c >= 'A' && c <= 'F') {
+      d = c - 'A' + 10;
+    } else {
+      return false;
+    }
+    v = v * 16 + static_cast<UINT>(d);
+  }
+  if (v == 0) {
+    return false;
+  }
+  *out = v;
+  return true;
+}
+
+bool ParseVk(const std::string& token, UINT* vk) {
+  if (token.size() == 1) {
+    const char c = token[0];
+    if (c >= 'a' && c <= 'z') {
+      *vk = static_cast<UINT>(c - 'a' + 'A');
+      return true;
+    }
+    if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+      *vk = static_cast<UINT>(c);
+      return true;
+    }
+    return false;
+  }
+  if ((token[0] == 'f' || token[0] == 'F') && token.size() <= 3) {
+    int n = 0;
+    for (size_t i = 1; i < token.size(); ++i) {
+      if (token[i] < '0' || token[i] > '9') {
+        return false;
+      }
+      n = n * 10 + (token[i] - '0');
+    }
+    if (n >= 1 && n <= 24) {
+      *vk = VK_F1 + static_cast<UINT>(n - 1);
+      return true;
+    }
+    return false;
+  }
+  static const struct {
+    const char* name;
+    UINT vk;
+  } kNamed[] = {
+      {"space", VK_SPACE},  {"tab", VK_TAB},      {"enter", VK_RETURN},
+      {"backspace", VK_BACK}, {"esc", VK_ESCAPE}, {"ins", VK_INSERT},
+      {"del", VK_DELETE},   {"home", VK_HOME},    {"end", VK_END},
+      {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT}, {"left", VK_LEFT},
+      {"right", VK_RIGHT},  {"up", VK_UP},        {"down", VK_DOWN},
+  };
+  const std::string lower = Lower(token);
+  for (const auto& n : kNamed) {
+    if (lower == n.name) {
+      *vk = n.vk;
+      return true;
+    }
+  }
+  if (token.size() > 2 && token[0] == '0' && (token[1] == 'x' || token[1] == 'X')) {
+    return HexToUint(token.substr(2), vk);
+  }
+  return false;
+}
+
+bool ParseHotkey(const std::string& text, UINT* mods, UINT* vk) {
+  *mods = 0;
+  *vk = 0;
+  bool have_vk = false;
+  size_t pos = 0;
+  while (pos <= text.size()) {
+    const size_t plus = text.find('+', pos);
+    const std::string token = Trim(text.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos));
+    if (!token.empty()) {
+      const std::string lower = Lower(token);
+      if (lower == "ctrl") {
+        *mods |= MOD_CONTROL;
+      } else if (lower == "alt") {
+        *mods |= MOD_ALT;
+      } else if (lower == "shift") {
+        *mods |= MOD_SHIFT;
+      } else if (lower == "win") {
+        *mods |= MOD_WIN;
+      } else if (!have_vk) {
+        if (!ParseVk(lower, vk)) {
+          return false;
+        }
+        have_vk = true;
+      } else {
+        return false;  // second key token
+      }
+    }
+    if (plus == std::string::npos) {
+      break;
+    }
+    pos = plus + 1;
+  }
+  // Shift-only or keyless combos would hijack normal typing — reject.
+  return have_vk && (*mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) != 0;
+}
+
+// ─── khipro.cfg (two lines: layout, hotkey) ───────────────────────────
+
+struct Config {
+  Layout layout = Layout::Classic;
+  UINT hotkey_mods = MOD_CONTROL;
+  UINT hotkey_vk = VK_SPACE;
+};
+
 std::wstring ConfigPath() {
   wchar_t path[MAX_PATH]{};
   GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -93,30 +270,54 @@ std::wstring ConfigPath() {
   return dir + L"khipro.cfg";
 }
 
-Layout LoadLayoutFromConfig() {
+Config LoadConfig() {
+  Config cfg;
   const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_READ, FILE_SHARE_READ,
                                   nullptr, OPEN_EXISTING, 0, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
-    return Layout::Classic;
+    return cfg;
   }
-  char buf[64]{};
+  char buf[512]{};
   DWORD read = 0;
   ReadFile(file, buf, sizeof(buf) - 1, &read, nullptr);
   CloseHandle(file);
-  // Anything other than an exact "layout=dark" (missing file, garbage,
-  // truncated write) falls back to Classic.
-  return Trim(std::string(buf, read)) == "layout=dark" ? Layout::Dark : Layout::Classic;
+
+  const std::string content(buf, read);
+  size_t pos = 0;
+  while (pos <= content.size()) {
+    const size_t nl = content.find('\n', pos);
+    const std::string line = Trim(content.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos));
+    if (line.rfind("layout=", 0) == 0) {
+      if (Lower(Trim(line.substr(7))) == "dark") {
+        cfg.layout = Layout::Dark;
+      }
+    } else if (line.rfind("hotkey=", 0) == 0) {
+      UINT mods = 0;
+      UINT vk = 0;
+      if (ParseHotkey(Trim(line.substr(7)), &mods, &vk)) {
+        cfg.hotkey_mods = mods;
+        cfg.hotkey_vk = vk;
+      }
+    }
+    if (nl == std::string::npos) {
+      break;
+    }
+    pos = nl + 1;
+  }
+  return cfg;
 }
 
-void SaveLayoutToConfig(Layout layout) {
-  const std::string line = layout == Layout::Dark ? "layout=dark" : "layout=classic";
+void SaveConfig() {
+  const std::string content =
+      std::string("layout=") + (g_layout == Layout::Dark ? "dark" : "classic") + "\n"
+      "hotkey=" + WideToUtf8(HotkeyLabel(g_hotkey_mods, g_hotkey_vk)) + "\n";
   const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_WRITE, 0,
                                   nullptr, CREATE_ALWAYS, 0, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
     return;  // read-only location: run without persistence
   }
   DWORD written = 0;
-  WriteFile(file, line.c_str(), static_cast<DWORD>(line.size()), &written, nullptr);
+  WriteFile(file, content.c_str(), static_cast<DWORD>(content.size()), &written, nullptr);
   CloseHandle(file);
 }
 
@@ -274,7 +475,11 @@ std::wstring BuildTooltip() {
          L" · Classic: " + Utf8ToWide(KHIPRO_CLASSIC_VERSION) +
          L" · Dark: " + Utf8ToWide(KHIPRO_DARK_VERSION) + L"\n";
   tip += std::wstring(LayoutName(g_layout));
-  tip += g_enabled ? L" · Active" : L" · Inactive";
+  if (g_capturing) {
+    tip += L" · Press shortcut…";
+  } else {
+    tip += g_enabled ? L" · Active" : L" · Inactive";
+  }
   return tip;
 }
 
@@ -285,6 +490,24 @@ void UpdateTrayIcon() {
   wcsncpy(g_nid.szTip, tip.c_str(), ARRAYSIZE(g_nid.szTip) - 1);
   g_nid.szTip[ARRAYSIZE(g_nid.szTip) - 1] = L'\0';
   Shell_NotifyIcon(NIM_MODIFY, &g_nid);
+}
+
+void ShowBalloon(const wchar_t* text) {
+  NOTIFYICONDATA nid = g_nid;
+  nid.uFlags = NIF_INFO;
+  nid.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+  wcsncpy(nid.szInfoTitle, L"Khipro", ARRAYSIZE(nid.szInfoTitle) - 1);
+  nid.szInfoTitle[ARRAYSIZE(nid.szInfoTitle) - 1] = L'\0';
+  wcsncpy(nid.szInfo, text, ARRAYSIZE(nid.szInfo) - 1);
+  nid.szInfo[ARRAYSIZE(nid.szInfo) - 1] = L'\0';
+  Shell_NotifyIcon(NIM_MODIFY, &nid);
+}
+
+void HideBalloon() {
+  NOTIFYICONDATA nid = g_nid;
+  nid.uFlags = NIF_INFO;
+  nid.szInfo[0] = L'\0';
+  Shell_NotifyIcon(NIM_MODIFY, &nid);
 }
 
 void SetEnabled(bool enabled) {
@@ -299,8 +522,42 @@ void SetLayout(Layout layout) {
   }
   g_layout = layout;
   ResetCompositionState();  // same semantics as a focus change
-  SaveLayoutToConfig(layout);
+  SaveConfig();
   UpdateTrayIcon();
+}
+
+// Registers the new combo; on failure the old one is restored.
+bool TrySetHotkey(UINT mods, UINT vk) {
+  const UINT old_mods = g_hotkey_mods;
+  const UINT old_vk = g_hotkey_vk;
+  UnregisterHotKey(g_window, HOTKEY_ID_TOGGLE);
+  if (!RegisterHotKey(g_window, HOTKEY_ID_TOGGLE, mods | MOD_NOREPEAT, vk)) {
+    RegisterHotKey(g_window, HOTKEY_ID_TOGGLE, old_mods | MOD_NOREPEAT, old_vk);
+    return false;
+  }
+  g_hotkey_mods = mods;
+  g_hotkey_vk = vk;
+  return true;
+}
+
+void CancelHotkeyCapture() {
+  if (!g_capturing) {
+    return;
+  }
+  g_capturing = false;
+  KillTimer(g_window, HOTKEY_CAPTURE_TIMER);
+  HideBalloon();
+  UpdateTrayIcon();
+}
+
+void StartHotkeyCapture() {
+  if (g_capturing) {
+    return;
+  }
+  g_capturing = true;
+  UpdateTrayIcon();
+  ShowBalloon(L"Press the new shortcut combination (with Ctrl, Alt or Win). Esc cancels.");
+  SetTimer(g_window, HOTKEY_CAPTURE_TIMER, 10000, nullptr);
 }
 
 void ShowTrayMenu() {
@@ -318,6 +575,10 @@ void ShowTrayMenu() {
                      g_layout == Layout::Dark ? IDM_LAYOUT_DARK : IDM_LAYOUT_CLASSIC,
                      MF_BYCOMMAND);
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  const std::wstring hotkey_item =
+      L"Change shortcut (" + HotkeyLabel(g_hotkey_mods, g_hotkey_vk) + L")";
+  AppendMenuW(menu, MF_STRING, IDM_CHANGE_HOTKEY, hotkey_item.c_str());
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Exit");
 
   POINT pt;
@@ -329,6 +590,62 @@ void ShowTrayMenu() {
 
 LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
   if (nCode < 0) {
+    return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
+  }
+
+  // Shortcut capture mode: swallow keydowns until a valid combo, Esc, or timeout.
+  if (g_capturing) {
+    if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+      const auto* k = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+      if ((k->flags & LLKHF_INJECTED) == 0) {
+        const UINT vk = k->vkCode;
+        if (vk == VK_ESCAPE) {
+          CancelHotkeyCapture();
+          return 1;
+        }
+        switch (vk) {
+          case VK_SHIFT:
+          case VK_LSHIFT:
+          case VK_RSHIFT:
+          case VK_CONTROL:
+          case VK_LCONTROL:
+          case VK_RCONTROL:
+          case VK_MENU:
+          case VK_LMENU:
+          case VK_RMENU:
+          case VK_LWIN:
+          case VK_RWIN:
+            return 1;  // modifier-only press: keep waiting
+        }
+        UINT mods = 0;
+        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
+          mods |= MOD_CONTROL;
+        }
+        if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+          mods |= MOD_ALT;
+        }
+        if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+          mods |= MOD_SHIFT;
+        }
+        if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) {
+          mods |= MOD_WIN;
+        }
+        if ((mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) == 0 || vk == VK_F12) {
+          MessageBeep(MB_ICONERROR);  // shift-only/bare key, or debugger-reserved
+          return 1;
+        }
+        if (TrySetHotkey(mods, vk)) {
+          SaveConfig();
+          g_capturing = false;
+          KillTimer(g_window, HOTKEY_CAPTURE_TIMER);
+          HideBalloon();
+          UpdateTrayIcon();
+        } else {
+          ShowBalloon(L"That combination is already in use — try another. Esc cancels.");
+        }
+        return 1;
+      }
+    }
     return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
   }
 
@@ -393,7 +710,14 @@ LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE: {
-      RegisterHotKey(hwnd, HOTKEY_ID_TOGGLE, MOD_CONTROL, VK_SPACE);
+      // Saved combo first; if another app holds it, fall back to the default.
+      // If even that fails, run without a hotkey — the menu still toggles.
+      if (!RegisterHotKey(hwnd, HOTKEY_ID_TOGGLE, g_hotkey_mods | MOD_NOREPEAT, g_hotkey_vk)) {
+        if (RegisterHotKey(hwnd, HOTKEY_ID_TOGGLE, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE)) {
+          g_hotkey_mods = MOD_CONTROL;
+          g_hotkey_vk = VK_SPACE;
+        }
+      }
       return 0;
     }
     case WM_COMMAND: {
@@ -407,11 +731,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case IDM_LAYOUT_DARK:
           SetLayout(Layout::Dark);
           return 0;
+        case IDM_CHANGE_HOTKEY:
+          StartHotkeyCapture();
+          return 0;
         case IDM_EXIT:
           DestroyWindow(hwnd);
           return 0;
       }
       break;
+    }
+    case WM_TIMER: {
+      if (wParam == HOTKEY_CAPTURE_TIMER) {
+        CancelHotkeyCapture();
+      }
+      return 0;
     }
     case WM_HOTKEY: {
       if (wParam == HOTKEY_ID_TOGGLE) {
@@ -452,7 +785,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
   g_instance = instance;
 
-  g_layout = LoadLayoutFromConfig();
+  const Config cfg = LoadConfig();
+  g_layout = cfg.layout;
+  g_hotkey_mods = cfg.hotkey_mods;
+  g_hotkey_vk = cfg.hotkey_vk;
 
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;
