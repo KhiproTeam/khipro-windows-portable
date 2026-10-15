@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,32 @@
 // Stamped by CI via `make PORTABLE_VERSION=<n>`; local builds report "dev".
 #ifndef KHIPRO_PORTABLE_VERSION
 #define KHIPRO_PORTABLE_VERSION "dev"
+#endif
+
+// Diagnostic hotkey-trace logging to khipro.log next to the exe.
+// Build with `make KHIPRO_HOTKEY_DEBUG=1`; compiled out otherwise.
+#ifdef KHIPRO_HOTKEY_DEBUG
+void HotkeyLog(const char* line) {
+  wchar_t path[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, path, MAX_PATH);
+  std::wstring dir(path);
+  const size_t slash = dir.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) {
+    dir.resize(slash + 1);
+  }
+  dir += L"khipro.log";
+  const HANDLE f = CreateFileW(dir.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
+                               nullptr, OPEN_ALWAYS, 0, nullptr);
+  if (f == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  DWORD written = 0;
+  WriteFile(f, line, static_cast<DWORD>(strlen(line)), &written, nullptr);
+  WriteFile(f, "\r\n", 2, &written, nullptr);
+  CloseHandle(f);
+}
+#else
+#define HotkeyLog(line) ((void)0)
 #endif
 
 namespace {
@@ -41,6 +68,7 @@ Layout g_layout = Layout::Classic;
 UINT g_hotkey_mods = MOD_CONTROL;
 UINT g_hotkey_vk = VK_SPACE;
 bool g_capturing = false;
+UINT g_tracked_mods = 0;  // capture-mode modifier state, from hook key events
 
 khipro_variant VariantFor(Layout layout) {
   return layout == Layout::Dark ? KHIPRO_VARIANT_DARK : KHIPRO_VARIANT_CLASSIC;
@@ -275,6 +303,7 @@ Config LoadConfig() {
   const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_READ, FILE_SHARE_READ,
                                   nullptr, OPEN_EXISTING, 0, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
+    HotkeyLog("[cfg] load: no file, defaults");
     return cfg;
   }
   char buf[512]{};
@@ -283,6 +312,9 @@ Config LoadConfig() {
   CloseHandle(file);
 
   const std::string content(buf, read);
+  HotkeyLog("[cfg] load: <<<");
+  HotkeyLog(content.c_str());
+  HotkeyLog("[cfg] load: >>>");
   size_t pos = 0;
   while (pos <= content.size()) {
     const size_t nl = content.find('\n', pos);
@@ -311,6 +343,9 @@ void SaveConfig() {
   const std::string content =
       std::string("layout=") + (g_layout == Layout::Dark ? "dark" : "classic") + "\n"
       "hotkey=" + WideToUtf8(HotkeyLabel(g_hotkey_mods, g_hotkey_vk)) + "\n";
+  HotkeyLog("[cfg] save: <<<");
+  HotkeyLog(content.c_str());
+  HotkeyLog("[cfg] save: >>>");
   const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_WRITE, 0,
                                   nullptr, CREATE_ALWAYS, 0, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
@@ -530,13 +565,25 @@ void SetLayout(Layout layout) {
 bool TrySetHotkey(UINT mods, UINT vk) {
   const UINT old_mods = g_hotkey_mods;
   const UINT old_vk = g_hotkey_vk;
-  UnregisterHotKey(g_window, HOTKEY_ID_TOGGLE);
+  {
+    char b[96];
+    wsprintfA(b, "[hotkey] try mods=%02X vk=%02X (old mods=%02X vk=%02X)", mods, vk, old_mods, old_vk);
+    HotkeyLog(b);
+  }
+  const BOOL unreg = UnregisterHotKey(g_window, HOTKEY_ID_TOGGLE);
   if (!RegisterHotKey(g_window, HOTKEY_ID_TOGGLE, mods | MOD_NOREPEAT, vk)) {
-    RegisterHotKey(g_window, HOTKEY_ID_TOGGLE, old_mods | MOD_NOREPEAT, old_vk);
+    const DWORD gle = GetLastError();
+    const BOOL restored = RegisterHotKey(g_window, HOTKEY_ID_TOGGLE, old_mods | MOD_NOREPEAT, old_vk);
+    {
+      char b[96];
+      wsprintfA(b, "[hotkey] reg FAILED gle=%lu unreg=%d restored=%d", gle, unreg, restored);
+      HotkeyLog(b);
+    }
     return false;
   }
   g_hotkey_mods = mods;
   g_hotkey_vk = vk;
+  HotkeyLog("[hotkey] set OK");
   return true;
 }
 
@@ -544,6 +591,7 @@ void CancelHotkeyCapture() {
   if (!g_capturing) {
     return;
   }
+  HotkeyLog("[capture] cancel");
   g_capturing = false;
   KillTimer(g_window, HOTKEY_CAPTURE_TIMER);
   HideBalloon();
@@ -552,9 +600,26 @@ void CancelHotkeyCapture() {
 
 void StartHotkeyCapture() {
   if (g_capturing) {
+    SetTimer(g_window, HOTKEY_CAPTURE_TIMER, 10000, nullptr);  // extend the window
     return;
   }
+  HotkeyLog("[capture] start");
   g_capturing = true;
+  // Best-effort baseline if modifiers are already held; the hook's own key
+  // events keep this accurate from here on.
+  g_tracked_mods = 0;
+  if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
+    g_tracked_mods |= MOD_CONTROL;
+  }
+  if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+    g_tracked_mods |= MOD_ALT;
+  }
+  if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+    g_tracked_mods |= MOD_SHIFT;
+  }
+  if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) {
+    g_tracked_mods |= MOD_WIN;
+  }
   UpdateTrayIcon();
   ShowBalloon(L"Press the new shortcut combination (with Ctrl, Alt or Win). Esc cancels.");
   SetTimer(g_window, HOTKEY_CAPTURE_TIMER, 10000, nullptr);
@@ -588,53 +653,70 @@ void ShowTrayMenu() {
   DestroyMenu(menu);
 }
 
+// MOD_* bit for a modifier virtual key, 0 for anything else.
+UINT ModifierBit(UINT vk) {
+  switch (vk) {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+      return MOD_SHIFT;
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+      return MOD_CONTROL;
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+      return MOD_ALT;
+    case VK_LWIN:
+    case VK_RWIN:
+      return MOD_WIN;
+  }
+  return 0;
+}
+
 LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
   if (nCode < 0) {
     return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
   }
 
   // Shortcut capture mode: swallow keydowns until a valid combo, Esc, or timeout.
+  // Modifier state is tracked from the hook's own key events — GetAsyncKeyState
+  // is unreliable inside WH_KEYBOARD_LL.
   if (g_capturing) {
-    if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-      const auto* k = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
-      if ((k->flags & LLKHF_INJECTED) == 0) {
-        const UINT vk = k->vkCode;
+    const auto* k = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+    if ((k->flags & LLKHF_INJECTED) == 0) {
+      const UINT vk = k->vkCode;
+      const UINT bit = ModifierBit(vk);
+      const bool key_up = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+      if (bit != 0) {
+        if (key_up) {
+          g_tracked_mods &= ~bit;
+        } else {
+          g_tracked_mods |= bit;
+        }
+      }
+      if (!key_up && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+        {
+          char b[64];
+          wsprintfA(b, "[capture-key] vk=%02X tracked=%02X", vk, g_tracked_mods);
+          HotkeyLog(b);
+        }
         if (vk == VK_ESCAPE) {
           CancelHotkeyCapture();
           return 1;
         }
-        switch (vk) {
-          case VK_SHIFT:
-          case VK_LSHIFT:
-          case VK_RSHIFT:
-          case VK_CONTROL:
-          case VK_LCONTROL:
-          case VK_RCONTROL:
-          case VK_MENU:
-          case VK_LMENU:
-          case VK_RMENU:
-          case VK_LWIN:
-          case VK_RWIN:
-            return 1;  // modifier-only press: keep waiting
+        if (bit != 0) {
+          return 1;  // modifier-only press: keep waiting
         }
-        UINT mods = 0;
-        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
-          mods |= MOD_CONTROL;
-        }
-        if (GetAsyncKeyState(VK_MENU) & 0x8000) {
-          mods |= MOD_ALT;
-        }
-        if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-          mods |= MOD_SHIFT;
-        }
-        if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) {
-          mods |= MOD_WIN;
-        }
-        if ((mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) == 0 || vk == VK_F12) {
+        if ((g_tracked_mods & (MOD_CONTROL | MOD_ALT | MOD_WIN)) == 0 || vk == VK_F12) {
+          char b[64];
+          wsprintfA(b, "[capture-key] REJECTED tracked=%02X (no ctrl/alt/win or F12)", g_tracked_mods);
+          HotkeyLog(b);
           MessageBeep(MB_ICONERROR);  // shift-only/bare key, or debugger-reserved
           return 1;
         }
-        if (TrySetHotkey(mods, vk)) {
+        if (TrySetHotkey(g_tracked_mods, vk)) {
           SaveConfig();
           g_capturing = false;
           KillTimer(g_window, HOTKEY_CAPTURE_TIMER);
@@ -645,6 +727,8 @@ LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
         }
         return 1;
       }
+    } else {
+      HotkeyLog("[capture-key] injected event ignored");
     }
     return CallNextHookEx(g_keyboard_hook, nCode, wParam, lParam);
   }
@@ -713,14 +797,31 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       // Saved combo first; if another app holds it, fall back to the default.
       // If even that fails, run without a hotkey — the menu still toggles.
       if (!RegisterHotKey(hwnd, HOTKEY_ID_TOGGLE, g_hotkey_mods | MOD_NOREPEAT, g_hotkey_vk)) {
+        const DWORD gle = GetLastError();
+        HotkeyLog("[startup] saved-combo reg FAILED, trying default");
+        {
+          char b[64];
+          wsprintfA(b, "[startup] gle=%lu mods=%02X vk=%02X", gle, g_hotkey_mods, g_hotkey_vk);
+          HotkeyLog(b);
+        }
         if (RegisterHotKey(hwnd, HOTKEY_ID_TOGGLE, MOD_CONTROL | MOD_NOREPEAT, VK_SPACE)) {
           g_hotkey_mods = MOD_CONTROL;
           g_hotkey_vk = VK_SPACE;
+          HotkeyLog("[startup] default ctrl+space registered");
+        } else {
+          HotkeyLog("[startup] default ALSO failed, running without hotkey");
         }
+      } else {
+        HotkeyLog("[startup] saved combo registered OK");
       }
       return 0;
     }
     case WM_COMMAND: {
+      {
+        char b[64];
+        wsprintfA(b, "[menu] command id=%lu", LOWORD(wParam));
+        HotkeyLog(b);
+      }
       switch (LOWORD(wParam)) {
         case IDM_TOGGLE:
           SetEnabled(!g_enabled);
@@ -742,12 +843,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
     case WM_TIMER: {
       if (wParam == HOTKEY_CAPTURE_TIMER) {
+        HotkeyLog("[capture] timeout fired");
         CancelHotkeyCapture();
       }
       return 0;
     }
     case WM_HOTKEY: {
       if (wParam == HOTKEY_ID_TOGGLE) {
+        HotkeyLog("[hotkey] WM_HOTKEY fired");
         SetEnabled(!g_enabled);
       }
       return 0;
@@ -789,6 +892,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   g_layout = cfg.layout;
   g_hotkey_mods = cfg.hotkey_mods;
   g_hotkey_vk = cfg.hotkey_vk;
+  {
+    char b[64];
+    wsprintfA(b, "[startup] loaded mods=%02X vk=%02X", g_hotkey_mods, g_hotkey_vk);
+    HotkeyLog(b);
+  }
 
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;

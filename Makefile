@@ -16,6 +16,13 @@ PORTABLE_VERSION ?=
 ifneq ($(PORTABLE_VERSION),)
 WIN_CXXFLAGS += -DKHIPRO_PORTABLE_VERSION=\"$(PORTABLE_VERSION)\"
 endif
+
+# Diagnostic: log the hotkey/capture flow to khipro.log next to the exe.
+KHIPRO_HOTKEY_DEBUG ?=
+
+ifneq ($(KHIPRO_HOTKEY_DEBUG),)
+WIN_CXXFLAGS += -DKHIPRO_HOTKEY_DEBUG
+endif
 WIN_LDFLAGS = -Wl,--gc-sections -s -municode -mwindows -static -static-libgcc -static-libstdc++ \
               -L$(LIB_LIB)
 WIN_LIBS = -lkhipro -lstdc++ -lwinpthread -lshell32
