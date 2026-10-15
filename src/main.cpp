@@ -14,6 +14,11 @@
 
 #include "resources.h"
 
+// Stamped by CI via `make PORTABLE_VERSION=<n>`; local builds report "dev".
+#ifndef KHIPRO_PORTABLE_VERSION
+#define KHIPRO_PORTABLE_VERSION "dev"
+#endif
+
 namespace {
 
 HINSTANCE g_instance = nullptr;
@@ -28,6 +33,18 @@ HWND g_last_focus = nullptr;
 
 std::string g_input_buffer;
 std::wstring g_rendered_output;
+
+enum class Layout { Classic, Dark };
+
+Layout g_layout = Layout::Classic;
+
+khipro_variant VariantFor(Layout layout) {
+  return layout == Layout::Dark ? KHIPRO_VARIANT_DARK : KHIPRO_VARIANT_CLASSIC;
+}
+
+const wchar_t* LayoutName(Layout layout) {
+  return layout == Layout::Dark ? L"Dark" : L"Classic";
+}
 
 std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) {
@@ -55,16 +72,64 @@ std::string WideToUtf8(const std::wstring& s) {
   return out;
 }
 
+std::string Trim(const std::string& s) {
+  const char* ws = " \t\r\n";
+  const size_t begin = s.find_first_not_of(ws);
+  if (begin == std::string::npos) {
+    return "";
+  }
+  const size_t end = s.find_last_not_of(ws);
+  return s.substr(begin, end - begin + 1);
+}
+
+std::wstring ConfigPath() {
+  wchar_t path[MAX_PATH]{};
+  GetModuleFileNameW(nullptr, path, MAX_PATH);
+  std::wstring dir(path);
+  const size_t slash = dir.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) {
+    dir.resize(slash + 1);
+  }
+  return dir + L"khipro.cfg";
+}
+
+Layout LoadLayoutFromConfig() {
+  const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                  nullptr, OPEN_EXISTING, 0, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return Layout::Classic;
+  }
+  char buf[64]{};
+  DWORD read = 0;
+  ReadFile(file, buf, sizeof(buf) - 1, &read, nullptr);
+  CloseHandle(file);
+  // Anything other than an exact "layout=dark" (missing file, garbage,
+  // truncated write) falls back to Classic.
+  return Trim(std::string(buf, read)) == "layout=dark" ? Layout::Dark : Layout::Classic;
+}
+
+void SaveLayoutToConfig(Layout layout) {
+  const std::string line = layout == Layout::Dark ? "layout=dark" : "layout=classic";
+  const HANDLE file = CreateFileW(ConfigPath().c_str(), GENERIC_WRITE, 0,
+                                  nullptr, CREATE_ALWAYS, 0, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;  // read-only location: run without persistence
+  }
+  DWORD written = 0;
+  WriteFile(file, line.c_str(), static_cast<DWORD>(line.size()), &written, nullptr);
+  CloseHandle(file);
+}
+
 std::string KhiproConvert(const std::string& input) {
   if (input.empty()) {
     return {};
   }
-  const int required = khipro_convert(KHIPRO_VARIANT_CLASSIC, input.c_str(), nullptr, 0);
+  const int required = khipro_convert(VariantFor(g_layout), input.c_str(), nullptr, 0);
   if (required <= 0) {
     return {};
   }
   std::vector<char> buf(static_cast<size_t>(required));
-  khipro_convert(KHIPRO_VARIANT_CLASSIC, input.c_str(), buf.data(), required);
+  khipro_convert(VariantFor(g_layout), input.c_str(), buf.data(), required);
   return std::string(buf.data(), static_cast<size_t>(required - 1));
 }
 
@@ -203,10 +268,13 @@ bool VkToUtf8Char(DWORD vk, DWORD scan, std::string* out) {
 }
 
 std::wstring BuildTooltip() {
-  std::wstring tip = L"Khipro - Compositional Bangla Layout\n";
-  tip += L"Version: " +
-         Utf8ToWide(std::string(khipro_library_version()) + "-" + KHIPRO_PORTABLE_PATCH) + L"\n";
-  tip += L"Status:  " + (g_enabled ? std::wstring(L"Active") : std::wstring(L"Inactive"));
+  std::wstring tip = L"Khipro - Compositional Bangla Layouts\n";
+  tip += L"Version: " + Utf8ToWide(KHIPRO_PORTABLE_VERSION) +
+         L" · Library: " + Utf8ToWide(khipro_library_version()) +
+         L" · Classic: " + Utf8ToWide(KHIPRO_CLASSIC_VERSION) +
+         L" · Dark: " + Utf8ToWide(KHIPRO_DARK_VERSION) + L"\n";
+  tip += std::wstring(LayoutName(g_layout));
+  tip += g_enabled ? L" · Active" : L" · Inactive";
   return tip;
 }
 
@@ -225,6 +293,16 @@ void SetEnabled(bool enabled) {
   UpdateTrayIcon();
 }
 
+void SetLayout(Layout layout) {
+  if (layout == g_layout) {
+    return;
+  }
+  g_layout = layout;
+  ResetCompositionState();  // same semantics as a focus change
+  SaveLayoutToConfig(layout);
+  UpdateTrayIcon();
+}
+
 void ShowTrayMenu() {
   HMENU menu = CreatePopupMenu();
   if (!menu) {
@@ -233,6 +311,13 @@ void ShowTrayMenu() {
 
   const wchar_t* label = g_enabled ? L"Inactive" : L"Active";
   AppendMenuW(menu, MF_STRING, IDM_TOGGLE, label);
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, IDM_LAYOUT_CLASSIC, L"Classic");
+  AppendMenuW(menu, MF_STRING, IDM_LAYOUT_DARK, L"Dark");
+  CheckMenuRadioItem(menu, IDM_LAYOUT_CLASSIC, IDM_LAYOUT_DARK,
+                     g_layout == Layout::Dark ? IDM_LAYOUT_DARK : IDM_LAYOUT_CLASSIC,
+                     MF_BYCOMMAND);
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Exit");
 
   POINT pt;
@@ -316,6 +401,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case IDM_TOGGLE:
           SetEnabled(!g_enabled);
           return 0;
+        case IDM_LAYOUT_CLASSIC:
+          SetLayout(Layout::Classic);
+          return 0;
+        case IDM_LAYOUT_DARK:
+          SetLayout(Layout::Dark);
+          return 0;
         case IDM_EXIT:
           DestroyWindow(hwnd);
           return 0;
@@ -360,6 +451,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   }
 
   g_instance = instance;
+
+  g_layout = LoadLayoutFromConfig();
 
   WNDCLASSW wc{};
   wc.lpfnWndProc = WindowProc;
