@@ -3,7 +3,7 @@
 
 /* Version macros - stamped by the khipro-library build from khipro.meta. */
 #ifndef KHIPRO_LIBRARY_VERSION
-#define KHIPRO_LIBRARY_VERSION "2.0.1"
+#define KHIPRO_LIBRARY_VERSION "2.0.2"
 #endif
 #ifndef KHIPRO_CLASSIC_VERSION
 #define KHIPRO_CLASSIC_VERSION "37.0.3"
@@ -12,10 +12,10 @@
 #define KHIPRO_TOUCHSCREEN_CLASSIC_VERSION "37.0.3"
 #endif
 #ifndef KHIPRO_DARK_VERSION
-#define KHIPRO_DARK_VERSION "2.0.0"
+#define KHIPRO_DARK_VERSION "2.0.2"
 #endif
 #ifndef KHIPRO_TOUCHSCREEN_DARK_VERSION
-#define KHIPRO_TOUCHSCREEN_DARK_VERSION "2.0.0"
+#define KHIPRO_TOUCHSCREEN_DARK_VERSION "2.0.2"
 #endif
 
 #ifdef __cplusplus
